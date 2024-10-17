@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"fmt"
 	"image"
+	"image/color"
 	_ "image/png" // used only here
 	"log"
 	"os"
@@ -50,22 +51,22 @@ func SetTemplateIcon(templateIconBytes []byte, regularIconBytes []byte) {
 // for other platforms.
 func SetIcon(iconBytes []byte) {
 	instance.lock.Lock()
-	instance.iconData = iconBytes
-	props := instance.props
-	conn := instance.conn
 	defer instance.lock.Unlock()
 
-	if props == nil {
+	pixmap := convertToPixels(iconBytes)
+	instance.iconPixmap = pixmap
+
+	if instance.props == nil {
 		return
 	}
 
-	props.SetMust("org.kde.StatusNotifierItem", "IconPixmap",
-		[]PX{convertToPixels(iconBytes)})
-	if conn == nil {
+	instance.props.SetMust("org.kde.StatusNotifierItem", "IconPixmap", []PX{pixmap})
+
+	if instance.conn == nil {
 		return
 	}
 
-	err := notifier.Emit(conn, &notifier.StatusNotifierItem_NewIconSignal{
+	err := notifier.Emit(instance.conn, &notifier.StatusNotifierItem_NewIconSignal{
 		Path: path,
 		Body: &notifier.StatusNotifierItem_NewIconSignalBody{},
 	})
@@ -290,8 +291,9 @@ type tray struct {
 	// the DBus connection that we will use
 	conn *dbus.Conn
 
-	// icon data for the main systray icon
-	iconData []byte
+	// icon for the main systray icon
+	iconPixmap PX
+
 	// title and tooltip state
 	title, tooltipTitle string
 
@@ -342,7 +344,7 @@ func (t *tray) createPropSpec() map[string]map[string]*prop.Prop {
 				Callback: nil,
 			},
 			"IconPixmap": {
-				Value:    []PX{convertToPixels(t.iconData)},
+				Value:    []PX{t.iconPixmap},
 				Writable: true,
 				Emit:     prop.EmitTrue,
 				Callback: nil,
@@ -374,7 +376,7 @@ func (t *tray) createPropSpec() map[string]map[string]*prop.Prop {
 		}}
 }
 
-// PX is picture pix map structure with width and high
+// PX is picture pix map structure with width and height
 type PX struct {
 	W, H int
 	Pix  []byte
@@ -410,15 +412,17 @@ func argbForImage(img image.Image) []byte {
 	w, h := img.Bounds().Dx(), img.Bounds().Dy()
 	data := make([]byte, w*h*4)
 	i := 0
-	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
-			r, g, b, a := img.At(x, y).RGBA()
-			data[i] = byte(a)
-			data[i+1] = byte(r)
-			data[i+2] = byte(g)
-			data[i+3] = byte(b)
+
+	for y := range h {
+		for x := range w {
+			px := color.NRGBAModel.Convert(img.At(x, y)).(color.NRGBA)
+			data[i+0] = px.A
+			data[i+1] = px.R
+			data[i+2] = px.G
+			data[i+3] = px.B
 			i += 4
 		}
 	}
+
 	return data
 }
